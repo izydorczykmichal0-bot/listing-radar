@@ -78,15 +78,23 @@ jobs:
           git config user.email "listing-radar@users.noreply.github.com"
 
           CHANGED=0
-          if ! git diff --quiet -- state.json; then
-            git add state.json
+
+          # WAŻNE: najpierw `git add`, potem porównanie STAGED z HEAD.
+          # Zwykły `git diff` nie widzi nowych (nieśledzonych) plików — przez
+          # to pierwszy przebieg nigdy nie zapisał state.json i każda próba
+          # startowała bazę od nowa.
+          git add state.json
+          if ! git diff --cached --quiet -- state.json; then
             CHANGED=1
           fi
 
-          # heartbeat: raz na6 dni ruszamy plik, żeby GitHub nie wyłączył
-          # harmonogramu po60 dniach bez aktywności repo
-          if [ ! -f last_run.txt ] || \
-             [ "$(find last_run.txt -mtime +6 | wc -l)" -gt 0 ]; then
+          # heartbeat: odświeżamy, gdy pliku brak albo data ZAPISANA W PLIKU
+          # ma >=6 dni (mtime NIE działa — checkout GitHuba zawsze ustawia
+          # świeży czas pliku, więc stare `find -mtime` nigdy nie zadziała).
+          STAMP=$(cut -dT -f1 last_run.txt 2>/dev/null | head -n1)
+          case "$STAMP" in ????-??-??) ;; *) STAMP="1970-01-01" ;; esac
+          DAYS=$(( ( $(date -u +%s) - $(date -u -d "$STAMP" +%s) ) / 86400 ))
+          if [ "$DAYS" -ge 6 ]; then
             date -u +%Y-%m-%dT%H:%M:%SZ > last_run.txt
             git add last_run.txt
             CHANGED=1
