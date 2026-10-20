@@ -1,0 +1,100 @@
+# Listing Radar — co5 minut sprawdza nowe listowania CoinGecko/SafeTrade
+# i wysyła alerty na Telegram. Stan trzymamy w pliku state.json (commit
+# tylko, gdy faktycznie się zmienił).
+#
+# UWAGA: harmonogramy GitHuba dotyczą PUBLICZNYCH repo (limity minut są
+# wtedy nieskończone). Jeśli repo masz prywatne — zmień '*/5' na '*/10'
+# niżej (960 przebiegów/mies. mieści się w2000 darmowych minutach).
+name: Listing Radar
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'   # prywatne repo? daj '*/10 * * * *'
+  workflow_dispatch:         # ręczny przycisk "Run workflow"
+
+permissions:
+  contents: write            # żeby móc zapisać state.json z powrotem
+
+concurrency:
+  group: listing-radar
+  cancel-in-progress: false
+
+jobs:
+  radar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Zależności
+        run: pip install -r requirements.txt
+
+      - name: Config.json z sekretów
+        env:
+          CG_API_KEY: ${{ secrets.CG_API_KEY }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          python - <<'PY'
+          import json, os
+          cfg = {
+              "coingecko_api_key": os.environ.get("CG_API_KEY", ""),
+              "telegram": {
+                  "bot_token": os.environ.get("TG_BOT_TOKEN", ""),
+                  "chat_id": os.environ.get("TG_CHAT_ID", ""),
+              },
+              "intervals": {"coingecko": 300, "safetrade": 120},
+              "daily_report": {"enabled": True, "hour": 9, "minute": 0},
+              "cross_window_days": 14,
+              "cg_exchange_id": "safe_trade",
+              "fetch_cg_exchange_tickers": True,
+              "enrich_tickers": True,
+              "db_path": "listing_radar.db",
+              "log_path": "alerts.log",
+              "max_events_per_cycle": 30,
+          }
+          with open("config.json", "w", encoding="utf-8") as f:
+              json.dump(cfg, f, indent=2, ensure_ascii=False)
+          PY
+
+      - name: Wczytaj poprzedni stan
+        run: python -m radar import-state state.json
+
+      - name: Sprawdź listowania
+        run: python -m radar check
+
+      - name: Zapisz stan
+        run: python -m radar export-state state.json
+
+      - name: Commit i push (tylko gdy stan się zmienił)
+        run: |
+          git config user.name "listing-radar[bot]"
+          git config user.email "listing-radar@users.noreply.github.com"
+
+          CHANGED=0
+          if ! git diff --quiet -- state.json; then
+            git add state.json
+            CHANGED=1
+          fi
+
+          # heartbeat: raz na6 dni ruszamy plik, żeby GitHub nie wyłączył
+          # harmonogramu po60 dniach bez aktywności repo
+          if [ ! -f last_run.txt ] || \
+             [ "$(find last_run.txt -mtime +6 | wc -l)" -gt 0 ]; then
+            date -u +%Y-%m-%dT%H:%M:%SZ > last_run.txt
+            git add last_run.txt
+            CHANGED=1
+          fi
+
+          if [ "$CHANGED" = "1" ]; then
+            git commit -m "radar: aktualizacja stanu"
+            git push
+          else
+            echo "Stan bez zmian — nie wysyłam commita."
+          fi

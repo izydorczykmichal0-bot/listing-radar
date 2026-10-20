@@ -1,0 +1,17 @@
+[Unit]
+Description=Listing Radar - monitoring nowych listowan CoinGecko + SafeTrade
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/listing-radar
+ExecStart=/home/ubuntu/listing-radar/.venv/bin/python -m radar watch
+Restart=always
+RestartSec=15
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

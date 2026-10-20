@@ -1,0 +1,23 @@
+{
+  "coingecko_api_key": "WPISZ_TUTAJ_SWÓJ_KLUCZ_COINGECKO_PRO",
+  "telegram": {
+    "bot_token": "",
+    "chat_id": ""
+  },
+  "intervals": {
+    "coingecko": 300,
+    "safetrade": 120
+  },
+  "cross_window_days": 14,
+  "cg_exchange_id": "safe_trade",
+  "fetch_cg_exchange_tickers": true,
+  "enrich_tickers": true,
+  "daily_report": {
+    "enabled": true,
+    "hour": 9,
+    "minute": 0
+  },
+  "db_path": "listing_radar.db",
+  "log_path": "alerts.log",
+  "max_events_per_cycle": 30
+}
