@@ -106,3 +106,4 @@ jobs:
           else
             echo "Stan bez zmian — nie wysyłam commita."
           fi
+# rejestrowanie harmonogramu
