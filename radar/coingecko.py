@@ -115,5 +115,22 @@ def fetch_exchange_tickers(session, exchange_id: str, api_key: str = "",
     return out, 200
 
 
+def fetch_coin(session, coin_id: str, api_key: str = "") -> tuple[dict | None, int]:
+    """Szczegóły coinu (/coins/{id}) — kategorie + opis (wzbogacanie alertów).
+
+    Zapytania są odchudzone (bez market_data/tickers/community), żeby response
+    był mały i szybki; pobieramy tylko przy tworzeniu zdarzenia (rzadko).
+    """
+    data, status = _cg_get(
+        session, f"/coins/{coin_id}",
+        params={"localization": "false", "tickers": "false",
+                "market_data": "false", "community_data": "false",
+                "developer_data": "false", "sparkline": "false"},
+        api_key=api_key, keyless=True, label="cg/coin")
+    if not isinstance(data, dict) or not data.get("id"):
+        return None, status
+    return data, 200
+
+
 def coin_url(coin_id: str) -> str:
     return f"https://www.coingecko.com/en/coins/{coin_id}"

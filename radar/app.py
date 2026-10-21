@@ -10,6 +10,7 @@ from . import coingecko as cg
 from . import safetrade as st
 from .alerts import Sink, _fmt_ts
 from .config import Config
+from .enrich import enrich
 from .httpc import make_session
 from .report import maybe_send_daily_report, send_report
 from .store import Store
@@ -113,6 +114,7 @@ def cycle_safetrade(cfg: Config, store: Store, sink: Sink, session,
             # skrzyżowanie: coin równocześnie nowy na CoinGecko i na SafeTrade?
             cands = store.find_cg_by_symbol(m.get("base_unit") or "")
             cg_note = ""
+            info_block = enrich(session, cfg, cands[0]["id"]) if cands else ""
             if cands:
                 c0 = cands[0]
                 cg_note = f"\nCoinGecko: {c0['name']} ({c0['id']}) — {cg.coin_url(c0['id'])}"
@@ -128,7 +130,7 @@ def cycle_safetrade(cfg: Config, store: Store, sink: Sink, session,
                          detail=f"SafeTrade dodaje rynek {base}/{quote} "
                                 f"(stan: {state}, utworzono: {created}), a ten coin "
                                 f"trafił na CoinGecko "
-                                f"{_warsaw_date(_cg_listed_ts(c))}.",
+                                f"{_warsaw_date(_cg_listed_ts(c))}." + info_block,
                          url=cg.coin_url(c["id"]), counter=counter)
 
             if state == "enabled":
@@ -139,7 +141,7 @@ def cycle_safetrade(cfg: Config, store: Store, sink: Sink, session,
                          f"(notowania jeszcze nie ruszyły)")
                 priority = "normal"
             detail = (f"Stan: {state}\nUtworzono rynku: {created}"
-                      + cg_note)
+                      + cg_note + info_block)
             emit(store, sink, cfg,
                  dedupe_key=f"st_new:{mid}",
                  source="safetrade",
@@ -155,6 +157,8 @@ def cycle_safetrade(cfg: Config, store: Store, sink: Sink, session,
             base = (m.get("base_unit") or "").upper()
             quote = (m.get("quote_unit") or "").upper()
             went_live = old_state != "enabled" and new_state == "enabled"
+            cands2 = store.find_cg_by_symbol(m.get("base_unit") or "")
+            info2 = enrich(session, cfg, cands2[0]["id"]) if cands2 else ""
             emit(store, sink, cfg,
                  dedupe_key=f"st_state:{mid}:{new_state}",
                  source="safetrade", etype="st_state_change",
@@ -163,7 +167,7 @@ def cycle_safetrade(cfg: Config, store: Store, sink: Sink, session,
                         if went_live else
                         f"SafeTrade: {base}/{quote} zmiana stanu "
                         f"{old_state} → {new_state}"),
-                 detail=f"Rynek utworzony: {m.get('created_at', '?')}",
+                 detail=f"Rynek utworzony: {m.get('created_at', '?')}" + info2,
                  url=st.trade_url(base, quote), counter=counter)
         else:
             store.update_st_market(mid, m.get("state", ""), now)
@@ -179,12 +183,15 @@ def cycle_safetrade(cfg: Config, store: Store, sink: Sink, session,
 
 
 # ----------------------------------------------------------------- CoinGecko
-def _handle_new_cg_coin(cfg, store, sink, coin, source, now, counter):
+def _handle_new_cg_coin(cfg, store, sink, session, coin, source, now, counter):
     coin_id = coin.get("id") or ""
     sym = coin.get("symbol") or ""
     name = coin.get("name") or coin_id
     activated = coin.get("activated_at")
     activated_s = _warsaw_date(activated) if activated else _warsaw_date(now)
+
+    # wzbogacenie alertu: kategoria (L1/memecoin/...) + opis zastosowań
+    info_block = enrich(session, cfg, coin_id)
 
     # skrzyżowanie: czy ten symbol jest już/notowany na SafeTrade?
     st_rows = store.find_st_by_base(sym)
@@ -208,14 +215,14 @@ def _handle_new_cg_coin(cfg, store, sink, coin, source, now, counter):
                  detail=(f"CoinGecko dodał coin {coin_id} ({activated_s}), "
                          f"a rynek {r['base'].upper()}/{r['quote'].upper()} na "
                          f"SafeTrade powstał {r['created_at'] or '?'} "
-                         f"(stan: {r['state']})."),
+                         f"(stan: {r['state']}).") + info_block,
                  url=cg.coin_url(coin_id), counter=counter)
 
     emit(store, sink, cfg,
          dedupe_key=f"cg_new:{coin_id}",
          source="coingecko", etype="cg_new_coin", priority=priority,
          title=f"🆕 CoinGecko: nowy coin {name} ({sym.upper()})",
-         detail=f"Dodany: {activated_s}\nId: {coin_id}" + st_note,
+         detail=f"Dodany: {activated_s}\nId: {coin_id}" + st_note + info_block,
          url=cg.coin_url(coin_id), counter=counter)
 
 
@@ -270,7 +277,7 @@ def cycle_coingecko(cfg: Config, store: Store, sink: Sink, session,
                       f"(tryb: {source}). Kolejne listowania będą raportowane.")
         else:
             for c in new_coins:
-                _handle_new_cg_coin(cfg, store, sink, c, source, now, counter)
+                _handle_new_cg_coin(cfg, store, sink, session, c, source, now, counter)
 
     # --- 2. pary SafeTrade śledzone przez CoinGecko (sygnał skrzyżowania) ---
     if cfg.fetch_cg_exchange_tickers:
@@ -312,6 +319,7 @@ def cycle_coingecko(cfg: Config, store: Store, sink: Sink, session,
                         r0 = st_rows[0]
                         st_note = (f"\nSafeTrade: {r0['base'].upper()}/{r0['quote'].upper()} "
                                    f"(stan: {r0['state']}, od {r0['created_at'] or '?'})")
+                    info2 = enrich(session, cfg, coin_id)
                     emit(store, sink, cfg,
                          dedupe_key=f"cg_pair:{pair_id}",
                          source="cross", etype="cg_safe_pair", priority="high",
@@ -320,7 +328,7 @@ def cycle_coingecko(cfg: Config, store: Store, sink: Sink, session,
                          detail=(f"CoinGecko śledzi tę parę giełdy "
                                  f"{cfg.cg_exchange_id}.\nCoin: {coin_id}"
                                  + (f"\n24h wolumen: {vol:,.0f}" if vol else "")
-                                 + st_note),
+                                 + st_note + info2),
                          url=cg.coin_url(coin_id), counter=counter)
     return ok
 

@@ -14,6 +14,10 @@ Alerty: **Telegram** + konsola + plik `alerts.log`. Raz dziennie (domyślnie
 **09:00**) dodatkowy **raport podsumowujący ostatnie 24 h** z wszystkimi
 nowymi listowaniami.
 
+Każdy alert o nowym listowaniu zawiera też **kategorię coinu** (np. L1, L2,
+Memecoin, DeFi) i **krótki opis zastosowań** — pobierane z CoinGecko
+przy tworzeniu sygnału (`radar/enrich.py`).
+
 > ⚠️ Narzędzie informacyjne — nie jest poradą inwestycyjną.
 
 ---

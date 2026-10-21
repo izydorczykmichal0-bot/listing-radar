@@ -113,3 +113,56 @@ Nigdy nie wklejaj tokena do plików w repo — tylko tutaj, do Secrets.
 | Zmienić sekret | Settings → Secrets and variables → Actions → Update |
 | Zatrzymać radar | GitHub → Actions → Listing Radar → „..." → Disable workflow |
 | Wrócić do trybu lokalnego | u siebie: `python -m radar watch` |
+
+---
+
+## Wariant produkcyjny: zewnętrzny cron (cron-job.org) — obowiązkowy fallback
+
+**Dlaczego:** od października 2026 natywny harmonogram GitHuba (`on: schedule`)
+potrafi w ogóle nie tworzyć przebiegów (bug po stronie GitHuba: `workflow_dispatch`
+działa, `schedule` martwe). Docelowym zabezpieczeniem jest darmowy cron-job.org,
+który wywołuje ten sam workflow przez API co 5 minut.
+
+### Potrzebne
+
+1. **Token GitHub (fine-grained PAT):**
+   - https://github.com/settings/personal-access-tokens/new
+   - nazwa: `listing-radar-cron`, Expiration: **No expiration**
+   - Repository access: **Only select repositories** → `izydorczykmichal0-bot/listing-radar`
+   - Permissions → Repository permissions → **Actions: Read and write** (Metadata doda się samo)
+   - Generate → skopiować `github_pat_...` (pokazuje się raz!; przy błędzie
+     „failed to generate the API credential" → Regenerate token)
+2. **Konto cron-job.org** (darmowe, bez karty): https://console.cron-job.org/signup
+
+### Zadanie w cron-job.org
+
+| Pole | Wartość |
+|---|---|
+| Tytuł | `Listing Radar 5min` |
+| URL | `https://api.github.com/repos/izydorczykmichal0-bot/listing-radar/actions/workflows/radar.yml/dispatches` |
+| Metoda (Zaawansowane) | **POST** |
+| Treść żądania | `{"ref":"main"}` |
+| Harmonogram | Co 5 minuta (`*/5 * * * *`), Europe/Warsaw |
+| Przełącznik „Zapisz odpowiedzi..." | włączony |
+
+Nagłówki (Zaawansowane → Nagłówki → Dodaj):
+
+```
+Authorization: Bearer <github_pat_...>
+Content-Type: application/json
+Accept: application/vnd.github+json
+```
+
+Kod sukcesu w logu: **204**. Test: „Uruchomienie testowe" → w GitHub Actions
+pojawia się nowy przebieg `workflow_dispatch`.
+
+### Uwagi eksploatacyjne
+
+- cron-job.org **wyłącza zadanie po 25 kolejnych błędach** → włącz e-mailowe
+  powiadomienia o błędach (zakładka POWIADOMIENIA).
+- Natywny `on: schedule` w radar.yml **zostaje** — gdy GitHub naprawi swojego
+  crona, oba wyzwalacze mogą działać równolegle (grupa `concurrency` +
+  dedupe zdarzeń chronią przed dublowaniem alertów).
+- Token trzymać w tajemnicy; wycofanie = usunięcie tokena w ustawieniach GitHuba.
+- Komendy lokalne (git) są jednorazowe — do codziennej pracy Terminal NIE jest
+  potrzebny; radar żyje w chmurze.
