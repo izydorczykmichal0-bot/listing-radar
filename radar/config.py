@@ -37,6 +37,7 @@ class Config:
     pump_enabled: bool = True          # moduł pump.fun (odłączalny)
     pump_meta_per_cycle: int = 40      # ile metadanych oceniamy w cyklu
     pump_min_score: int = 6            # próg punktów do alertu 🔬 (max 12)
+    pump_min_mcap: float = 5000.0      # minimalny market cap w USD (0 = brak)
 
     @property
     def cg_mode(self) -> str:
@@ -79,6 +80,7 @@ def load_config(path: str | None = None) -> Config:
         cfg.pump_meta_per_cycle = int(
             pu.get("meta_per_cycle", cfg.pump_meta_per_cycle))
         cfg.pump_min_score = int(pu.get("min_score", cfg.pump_min_score))
+        cfg.pump_min_mcap = float(pu.get("min_mcap", cfg.pump_min_mcap))
 
     # Nadpisania z env (przydatne w systemd/Dockerze).
     cfg.coingecko_api_key = os.environ.get("CG_API_KEY", cfg.coingecko_api_key)

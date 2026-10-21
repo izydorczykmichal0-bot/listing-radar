@@ -17,6 +17,8 @@ ETAP 2 (przegląd, metadane + sieć):
   K5  strona WYMAGANA i ŻYWA (HTTP 200-399, tytuł, realna treść)
   Twitter liczy się tylko jako czysty profil (x.com/nazwa), nie /status/
   Wiek domeny z RDAP: rejestracja ≥90 dni = +2 pkt
+  Próg MC: token czeka w kolejce, aż market cap ≥ `pump.min_mcap`
+      (domyślnie5000 USD; przegląd co ~10 min, MC czytane z listy = darmowe)
   Scoring: słowa użytkowe 0-4 + strona 2 + twitter 2 + telegram 1
            + długi opis 1 + stara domena 2 = MAX 12 pkt
   Próg alertu: `pump.min_score` (domyślnie 6).
@@ -96,6 +98,7 @@ _RETENTION = 3 * 3600     # oceny sprzed 3h nie wracają na listę najnowszych
 _CREATOR_WINDOW = 3 * 3600    # okno wykrywania dev-fabryki (K4)
 _CREATOR_MAX = 3               # ≥ tokenów tego samego twórcy = fabryka
 _AGE_BONUS_DAYS = 90           # domena ≥90 dni = +2 pkt
+_RECHECK = 600                 # wstrzymany kandydat: ponowny przegląd MC co ~10 min
 
 
 def lex_bad(name: str, symbol: str) -> bool:
@@ -288,7 +291,7 @@ def score_token(desc: str, website: str, twitter: str, telegram: str,
 def cycle_pump(cfg: Config, store, sink, session, counter: dict, emit_fn) -> dict:
     """Jeden cykl: nowe monety → antyscam etap1 → metadane → K5/scoring → 🔬."""
     stats = {"fresh": 0, "queued": 0, "reviewed": 0, "candidates": 0,
-             "baseline": 0}
+             "baseline": 0, "held": 0}
     if not cfg.pump_enabled:
         return stats
 
@@ -309,6 +312,10 @@ def cycle_pump(cfg: Config, store, sink, session, counter: dict, emit_fn) -> dic
         sink.info(f"📌 Pump.fun: baza odniesienia — {len(items)} ostatnich "
                   f"tokenów pominiętych; kolejne cykle = tylko nowe.")
         return stats
+
+    # świeże MC z bieżącej listy (darmowe — dane i tak mamy z ingestu)
+    mc_cache = {str(x.get("mint")): float(x.get("market_cap_usd") or 0.0)
+                for x in items}
 
     # ---------------- etap1: tanie zabójcy (bez zapytań) ----------------
     now = int(time.time())
@@ -359,9 +366,21 @@ def cycle_pump(cfg: Config, store, sink, session, counter: dict, emit_fn) -> dic
         })
         stats["queued"] += 1
 
-    # ---------------- etap2: metadane + K5 + scoring ----------------
-    for row in store.pump_queue_pop(cfg.pump_meta_per_cycle):
+    # ---------------- etap2: próg MC → metadane → K5 → scoring ----------------
+    for row in store.pump_queue_pop(now - _RECHECK, cfg.pump_meta_per_cycle):
         mint = row["mint"]
+
+        # próg minimalnego market cap (przegląd co ~10 min, MC z listy = darmowe)
+        mc_val = float(row["mcap_usd"] or 0.0)
+        if cfg.pump_min_mcap > 0:
+            fresh = mc_cache.get(mint)
+            if fresh is not None and fresh > 0:
+                mc_val = fresh
+            if mc_val < cfg.pump_min_mcap:
+                store.pump_touch(mint, now, mc_val)   # zostań w kolejce, wróć
+                stats["held"] += 1
+                continue
+
         info = fetch_token_info(session, row["uri"], mint)
         if info is None:
             store.pump_verdict(mint, row["name"], row["symbol"], "meta_fail",
@@ -421,7 +440,7 @@ def cycle_pump(cfg: Config, store, sink, session, counter: dict, emit_fn) -> dic
             lines.append(f"Twitter: {twitter}")
         if telegram:
             lines.append(f"Telegram: {telegram}")
-        lines.append(f"Utworzony: {when} | MC: ${row['mcap_usd']:,.0f} | "
+        lines.append(f"Utworzony: {when} | MC: ${mc_val:,.0f} | "
                      f"Dyplomował: {'TAK' if row['complete'] else 'nie'}")
         emit_fn(
             store, sink, cfg,
@@ -435,6 +454,7 @@ def cycle_pump(cfg: Config, store, sink, session, counter: dict, emit_fn) -> dic
 
     if any(stats.values()):
         sink.info(f"Pump.fun: nowych {stats['fresh']}, w kolejce {stats['queued']}, "
+                  f"wstrzymanych (MC) {stats['held']}, "
                   f"oceniono {stats['reviewed']}, kandydatów {stats['candidates']}"
                   + (f", baza {stats['baseline']}" if stats["baseline"] else ""))
     return stats

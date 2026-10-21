@@ -23,6 +23,7 @@
   "pump": {
     "enabled": true,
     "meta_per_cycle": 40,
-    "min_score": 6
+    "min_score": 6,
+    "min_mcap": 5000
   }
 }

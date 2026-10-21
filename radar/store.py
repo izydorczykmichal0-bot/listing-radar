@@ -87,7 +87,8 @@ CREATE TABLE IF NOT EXISTS pump_queue (       -- etap1 przeszedł → czeka na m
     complete   INTEGER NOT NULL DEFAULT 0,
     queued_at  INTEGER NOT NULL,
     creator    TEXT,
-    sig        TEXT
+    sig        TEXT,
+    last_try   INTEGER NOT NULL DEFAULT 0    -- ostatni przegląd MC (hold)
 );
 """
 
@@ -104,6 +105,7 @@ class Store:
             "ALTER TABLE pump_seen ADD COLUMN sig TEXT",
             "ALTER TABLE pump_queue ADD COLUMN creator TEXT",
             "ALTER TABLE pump_queue ADD COLUMN sig TEXT",
+            "ALTER TABLE pump_queue ADD COLUMN last_try INTEGER NOT NULL DEFAULT 0",
         ):
             try:
                 self.conn.execute(stmt)
@@ -271,11 +273,22 @@ class Store:
             (creator, since_ts),
         ).fetchone()[0])
 
-    def pump_queue_pop(self, n: int) -> list[sqlite3.Row]:
+    def pump_queue_pop(self, cutoff_ts: int, n: int) -> list[sqlite3.Row]:
+        """Świeże (last_try=0) zawsze pierwsze; wstrzymane wracają po cutoff."""
         rows = self.conn.execute(
-            "SELECT * FROM pump_queue ORDER BY queued_at LIMIT ?", (n,)
+            "SELECT * FROM pump_queue WHERE last_try <= ? "
+            "ORDER BY last_try ASC, queued_at ASC LIMIT ?",
+            (cutoff_ts, n),
         ).fetchall()
         return list(rows)
+
+    def pump_touch(self, mint: str, last_try: int, mcap_usd: float) -> None:
+        """Odnotuj próbę przeglądu (hold MC) + zapisz świeże MC."""
+        self.conn.execute(
+            "UPDATE pump_queue SET last_try=?, mcap_usd=? WHERE mint=?",
+            (last_try, mcap_usd, mint),
+        )
+        self.conn.commit()
 
     def pump_prune(self, cutoff: int) -> int:
         """Usuwa oceny/kolejkę starsze niż cutoff — tokeny spoza okna i tak nie

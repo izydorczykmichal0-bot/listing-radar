@@ -129,6 +129,41 @@ def e2e_alert() -> None:
     c = {"n": 0, "suppressed": 0}
     cycle_pump(cfg, store, sink, session, c, real_emit)
     check(store.counts()["events"] == 1, "dedupe: drugi raz = bez duplikatu")
+
+    # --- próg MC: token poniżej5k CZEKA, nie dostaje alertu ---
+    store.pump_queue_add({
+        "mint": "cand2", "name": "FundusVault", "symbol": "FVLT",
+        "uri": "https://example.io/f.json", "website": "https://example.io",
+        "twitter": "", "created_ms": 1792578000000, "mcap_usd": 4200.0,
+        "complete": 0, "creator": "AbcCreator123", "sig": "sigcand2",
+    })
+    c = {"n": 0, "suppressed": 0}
+    s_held = cycle_pump(cfg, store, sink, session, c, real_emit)
+    still = store.conn.execute(
+        "SELECT last_try FROM pump_queue WHERE mint='cand2'").fetchone()
+    check(s_held["held"] == 1 and still is not None and still["last_try"] > 0,
+          f"MC $4 200 < 5 000 → wstrzymany (held={s_held['held']})")
+    check(store.counts()["events"] == 1, "brak alertu przy niskim MC")
+
+    # --- MC urosło do $6 500 (widać na liście) → pełna ocena + alert ---
+    # symulacja: minęło10 min od ostatniego przeglądu (recheck)
+    store.conn.execute("UPDATE pump_queue SET last_try=0 WHERE mint='cand2'")
+    store.conn.commit()
+    P.fetch_new_coins = lambda s, **k: [
+        {"mint": "base1", "name": "Baza", "symbol": "BZ"},
+        {"mint": "cand2", "name": "FundusVault", "symbol": "FVLT",
+         "website": "https://example.io", "metadata_uri": "https://example.io/f.json",
+         "created_timestamp": 1792578000000, "market_cap_usd": 6500.0},
+    ]
+    c = {"n": 0, "suppressed": 0}
+    s_pass = cycle_pump(cfg, store, sink, session, c, real_emit)
+    check(s_pass["candidates"] == 1 and store.counts()["events"] == 2,
+          f"MC $6 500 ≥ 5 000 → ocena i ALERT (kandydaci={s_pass['candidates']})")
+    ev2 = store.conn.execute(
+        "SELECT * FROM events WHERE dedupe_key='pump:cand2'").fetchone()
+    check(ev2 is not None and "$6,500" in ev2["detail"],
+          "alert pokazuje świeże MC ($6,500)")
+
     # przywróć live
     P.fetch_new_coins, P.fetch_token_info = orig_fetch, orig_info
     P.check_website, P.domain_age_days = orig_check, orig_age
