@@ -201,3 +201,4 @@ journalctl -u listing-radar -f
   dziwne dane).
 * Webhook CoinGecko `cg.coin.listed` jest jeszcze w private beta —
   przyszła optymalizacja (mniej niż 30 s opóźnienia).
+Monitoring 24/7.
