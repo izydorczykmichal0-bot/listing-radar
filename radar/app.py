@@ -12,6 +12,7 @@ from .alerts import Sink, _fmt_ts
 from .config import Config
 from .enrich import enrich
 from .httpc import make_session
+from .pump import cycle_pump
 from .report import maybe_send_daily_report, send_report
 from .store import Store
 
@@ -356,6 +357,12 @@ def run_cycle(cfg: Config, store: Store, sink: Sink, session) -> None:
     maybe_send_daily_report(cfg, store, sink)
     cycle_safetrade(cfg, store, sink, session, counter)
     cycle_coingecko(cfg, store, sink, session, counter)
+    if cfg.pump_enabled:
+        try:
+            cycle_pump(cfg, store, sink, session, counter, emit)
+        except Exception:  # noqa: BLE001 — pump.fun to dodatek, nie trzon
+            log.exception("Pump.fun: nieoczekiwany błąd (radar działa dalej)")
+            sink.info("⚠ Pump.fun: błąd modułu — pomijam cykl pump.fun")
     flush_telegram(cfg, store, sink)
     if counter.get("suppressed"):
         sink.info(f"ℹ W tym cyklu stłumiono {counter['suppressed']} zdarzeń "
@@ -369,7 +376,8 @@ def cmd_check(cfg: Config) -> None:
     session = make_session()
     try:
         sink.info(f"▶ Pojedyncze sprawdzenie (źródła: CoinGecko[{cfg.cg_mode}], "
-                  f"SafeTrade; TG: {'TAK' if cfg.telegram.enabled else 'nie'})")
+                  f"SafeTrade{', Pump.fun' if cfg.pump_enabled else ''}; "
+                  f"TG: {'TAK' if cfg.telegram.enabled else 'nie'})")
         run_cycle(cfg, store, sink, session)
         c = store.counts()
         sink.info(f"✔ Koniec. Monety CG: {c['cg_coins']}, rynki ST: {c['st_markets']}, "
@@ -384,6 +392,7 @@ def cmd_watch(cfg: Config) -> None:
     session = make_session()
     next_st = 0.0
     next_cg = 0.0
+    next_pump = 0.0
     fails = {"st": 0, "cg": 0}
     sink.info(f"▶ Listing Radar startuje — CG[{cfg.cg_mode}] co {cfg.interval_coingecko}s, "
               f"SafeTrade co {cfg.interval_safetrade}s, TG: "
@@ -429,7 +438,19 @@ def cmd_watch(cfg: Config) -> None:
                               f"(limit {cfg.max_events_per_cycle}/cykl)")
                 flush_telegram(cfg, store, sink)
 
-            time.sleep(min(5.0, max(0.5, min(next_st, next_cg) - time.time())))
+            now = time.time()
+            if now >= next_pump and cfg.pump_enabled:
+                counter = {"n": 0, "suppressed": 0}
+                try:
+                    cycle_pump(cfg, store, sink, session, counter, emit)
+                except Exception as e:  # noqa: BLE001
+                    log.exception("Pump.fun: nieoczekiwany błąd")
+                    sink.info(f"⚠ Pump.fun: błąd {e}")
+                next_pump = time.time() + cfg.interval_coingecko
+                flush_telegram(cfg, store, sink)
+
+            time.sleep(min(5.0, max(0.5, min(next_st, next_cg, next_pump)
+                                    - time.time())))
     except KeyboardInterrupt:
         sink.info("■ Listing Radar zatrzymany przez użytkownika.")
     finally:

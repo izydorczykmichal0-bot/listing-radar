@@ -18,6 +18,12 @@ Każdy alert o nowym listowaniu zawiera też **kategorię coinu** (np. L1, L2,
 Memecoin, DeFi) i **krótki opis zastosowań** — pobierane z CoinGecko
 przy tworzeniu sygnału (`radar/enrich.py`).
 
+Osobno moduł `radar/pump.py` skanuje **pump.fun** i wysyła alarmy 🔬 tylko o
+tokenach z sygnałami fundamentów (opis użytkowy + strona/twitter/telegram,
+memy odsiewane leksykonem). Odłączalny flagą `pump.enabled`; źródło jest
+nieoficjalne — gdyby padło, reszta radaru działa dalej. To filtr sygnałów
+informacyjnych, **nie doradztwo inwestycyjne**.
+
 > ⚠️ Narzędzie informacyjne — nie jest poradą inwestycyjną.
 
 ---
@@ -201,4 +207,3 @@ journalctl -u listing-radar -f
   dziwne dane).
 * Webhook CoinGecko `cg.coin.listed` jest jeszcze w private beta —
   przyszła optymalizacja (mniej niż 30 s opóźnienia).
-Monitoring 24/7.

@@ -33,6 +33,10 @@ class Config:
     db_path: str = "listing_radar.db"
     log_path: str = "alerts.log"
     max_events_per_cycle: int = 30     # zabezpieczenie przed falą alertów
+    # pump.fun — wczesna filtracja „fundamenty vs memecoiny"
+    pump_enabled: bool = True          # moduł pump.fun (odłączalny)
+    pump_meta_per_cycle: int = 40      # ile metadanych oceniamy w cyklu
+    pump_min_score: int = 5            # próg punktów do alertu 🔬
 
     @property
     def cg_mode(self) -> str:
@@ -70,6 +74,11 @@ def load_config(path: str | None = None) -> Config:
         cfg.max_events_per_cycle = int(
             raw.get("max_events_per_cycle", cfg.max_events_per_cycle)
         )
+        pu = raw.get("pump") or {}
+        cfg.pump_enabled = bool(pu.get("enabled", cfg.pump_enabled))
+        cfg.pump_meta_per_cycle = int(
+            pu.get("meta_per_cycle", cfg.pump_meta_per_cycle))
+        cfg.pump_min_score = int(pu.get("min_score", cfg.pump_min_score))
 
     # Nadpisania z env (przydatne w systemd/Dockerze).
     cfg.coingecko_api_key = os.environ.get("CG_API_KEY", cfg.coingecko_api_key)

@@ -26,6 +26,7 @@ SECTIONS: list[tuple[str, str]] = [
     ("st_new_market_pre", "📥 SafeTrade — pre-listingi (przed notowaniami)"),
     ("cg_safe_pair", "🔗 CoinGecko → SafeTrade (nowe pary)"),
     ("cg_new_coin", "🆕 CoinGecko — nowe monety"),
+    ("pump_promising", "🔬 Pump.fun — projekty z sygnałami fundamentów"),
 ]
 MAX_PER_SECTION = 12
 TG_LIMIT = 3900  # Telegram: maks. 4096 znaków na wiadomość

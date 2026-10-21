@@ -63,6 +63,28 @@ CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS pump_seen (        -- ocenione tokeny pump.fun
+    mint    TEXT PRIMARY KEY,
+    name    TEXT,
+    symbol  TEXT,
+    verdict TEXT NOT NULL,                    -- baseline|nsfw|lex|meta_fail|alerted|no:...
+    score   INTEGER NOT NULL DEFAULT 0,
+    ts      INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS pump_queue (       -- etap1 przeszedł → czeka na metadane
+    mint       TEXT PRIMARY KEY,
+    name       TEXT,
+    symbol     TEXT,
+    uri        TEXT,
+    website    TEXT,
+    twitter    TEXT,
+    created_ms INTEGER,
+    mcap_usd   REAL,
+    complete   INTEGER NOT NULL DEFAULT 0,
+    queued_at  INTEGER NOT NULL
+);
 """
 
 
@@ -169,6 +191,65 @@ class Store:
             "SELECT * FROM st_markets WHERE base = ? COLLATE NOCASE", (base,)
         ).fetchall()
 
+    # ---------------- pump.fun ----------------
+    def pump_seen_count(self) -> int:
+        return int(self.conn.execute("SELECT COUNT(*) FROM pump_seen")
+                   .fetchone()[0])
+
+    def pump_known(self, mint: str) -> bool:
+        row = self.conn.execute(
+            "SELECT 1 FROM pump_seen WHERE mint=? UNION ALL "
+            "SELECT 1 FROM pump_queue WHERE mint=? LIMIT 1",
+            (mint, mint),
+        ).fetchone()
+        return row is not None
+
+    def pump_mark_seen(self, rows: list[dict], now: int, verdict: str) -> None:
+        self.conn.executemany(
+            "INSERT OR IGNORE INTO pump_seen(mint,name,symbol,verdict,score,ts) "
+            "VALUES(?,?,?,?,0,?)",
+            [(r["mint"], r.get("name"), r.get("symbol"), verdict, now)
+             for r in rows],
+        )
+        self.conn.commit()
+
+    def pump_verdict(self, mint: str, name: str | None, symbol: str | None,
+                     verdict: str, score: int, now: int) -> None:
+        self.conn.execute("DELETE FROM pump_queue WHERE mint=?", (mint,))
+        self.conn.execute(
+            "INSERT INTO pump_seen(mint,name,symbol,verdict,score,ts) "
+            "VALUES(?,?,?,?,?,?) "
+            "ON CONFLICT(mint) DO UPDATE SET verdict=excluded.verdict, "
+            "score=excluded.score, ts=excluded.ts",
+            (mint, name, symbol, verdict, score, now),
+        )
+        self.conn.commit()
+
+    def pump_queue_add(self, row: dict) -> None:
+        self.conn.execute(
+            "INSERT OR IGNORE INTO pump_queue"
+            "(mint,name,symbol,uri,website,twitter,created_ms,mcap_usd,"
+            "complete,queued_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (row["mint"], row["name"], row["symbol"], row["uri"],
+             row["website"], row["twitter"], row["created_ms"],
+             row["mcap_usd"], row["complete"], int(time.time())),
+        )
+        self.conn.commit()
+
+    def pump_queue_pop(self, n: int) -> list[sqlite3.Row]:
+        rows = self.conn.execute(
+            "SELECT * FROM pump_queue ORDER BY queued_at LIMIT ?", (n,)
+        ).fetchall()
+        return list(rows)
+
+    def pump_prune(self, cutoff: int) -> int:
+        """Usuwa oceny/kolejkę starsze niż cutoff — tokeny spoza okna i tak nie
+        wracają na listę „najnowszych", a state.json nie rośnie w nieskończoność."""
+        a = self.conn.execute("DELETE FROM pump_seen WHERE ts<?", (cutoff,))
+        b = self.conn.execute("DELETE FROM pump_queue WHERE queued_at<?", (cutoff,))
+        self.conn.commit()
+        return a.rowcount + b.rowcount
+
     # ---------------- zdarzenia ----------------
     def add_event(self, dedupe_key: str, source: str, etype: str, priority: str,
                   title: str, detail: str, url: str | None, now: int,
@@ -250,6 +331,11 @@ class Store:
                                   "FROM cg_safe_pairs ORDER BY pair_id"),
             "events": rows("SELECT ts, dedupe_key, source, etype, priority, title, "
                            "detail, url, alerted FROM events ORDER BY id"),
+            "pump_seen": rows("SELECT mint, name, symbol, verdict, score, ts "
+                              "FROM pump_seen ORDER BY mint"),
+            "pump_queue": rows("SELECT mint, name, symbol, uri, website, twitter, "
+                               "created_ms, mcap_usd, complete, queued_at "
+                               "FROM pump_queue ORDER BY mint"),
         }
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
@@ -264,7 +350,8 @@ class Store:
             data = json.load(f)
 
         c = self.conn
-        for tbl in ("events", "cg_safe_pairs", "st_markets", "cg_coins", "meta"):
+        for tbl in ("events", "cg_safe_pairs", "st_markets", "cg_coins", "meta",
+                    "pump_seen", "pump_queue"):
             c.execute(f"DELETE FROM {tbl}")
 
         c.executemany(
@@ -285,5 +372,12 @@ class Store:
             "INSERT INTO events(ts, dedupe_key, source, etype, priority, title, "
             "detail, url, alerted) VALUES(?,?,?,?,?,?,?,?,?)",
             data.get("events", []))
+        c.executemany(
+            "INSERT INTO pump_seen(mint, name, symbol, verdict, score, ts) "
+            "VALUES(?,?,?,?,?,?)", data.get("pump_seen", []))
+        c.executemany(
+            "INSERT INTO pump_queue(mint, name, symbol, uri, website, twitter, "
+            "created_ms, mcap_usd, complete, queued_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            data.get("pump_queue", []))
         c.commit()
         return True
