@@ -20,9 +20,13 @@ przy tworzeniu sygnału (`radar/enrich.py`).
 
 Osobno moduł `radar/pump.py` skanuje **pump.fun** i wysyła alarmy 🔬 tylko o
 tokenach z sygnałami fundamentów (opis użytkowy + strona/twitter/telegram,
-memy odsiewane leksykonem). Odłączalny flagą `pump.enabled`; źródło jest
-nieoficjalne — gdyby padło, reszta radaru działa dalej. To filtr sygnałów
-informacyjnych, **nie doradztwo inwestycyjne**.
+memy odsiewane leksykonem). **Antyscam v2**: zabójcy na podszycie pod markę
+(google/binance/trump...), skrócone linki, kopie metadata, dev-fabryki i
+martwe strony; twitter liczy się tylko jako profil (nie `/status/`); bonus za
+wiek domeny z RDAP (≥90 dni = +2); próg domyślny6 pkt (max12).
+Odłączalny flagą `pump.enabled`; źródło jest nieoficjalne — gdyby padło,
+reszta radaru działa dalej. To filtr sygnałów informacyjnych,
+**nie doradztwo inwestycyjne**.
 
 > ⚠️ Narzędzie informacyjne — nie jest poradą inwestycyjną.
 

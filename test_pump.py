@@ -10,7 +10,8 @@ import tempfile
 
 from radar.config import load_config
 from radar.httpc import make_session
-from radar.pump import cycle_pump, lex_bad, score_token
+from radar.pump import (brand_bad, cycle_pump, lex_bad, score_token,
+                        shortener_bad, twitter_profile_ok)
 from radar.store import Store
 
 OK = True
@@ -51,6 +52,25 @@ def unit() -> None:
     check(not ok and any("link" in r for r in reasons),
           f"brak linków → odrzucony ({reasons})")
 
+    print("== antyscam v2 ==")
+    check(brand_bad("Google Ai Studio", "GAI", "https://www.google.com/url?i=1"),
+          "K1: Google w nazwie/hostcie → odrzucony")
+    check(not brand_bad("VortexDex", "VRTX", "https://vortexdex.io"),
+          "K1: VortexDex → nie jest impersonacją")
+    check(shortener_bad("https://bit.ly/abc"), "K2: bit.ly → odrzucony")
+    check(not shortener_bad("https://computefund.site"),
+          "K2: zwykła domena → przechodzi")
+    check(twitter_profile_ok("https://x.com/vortexdex"), "czysty profil x.com ✅")
+    check(not twitter_profile_ok("https://x.com/a/status/123456"),
+          "wpis /status/ → nie punktuje")
+    pts_a, ok_a, _ = score_token(good, "https://site.io", "", "", 7)
+    pts_b, ok_b, _ = score_token(good, "https://site.io", "", "", 7,
+                                 domain_days=200)
+    check(ok_b and pts_b == pts_a + 2,
+          f"wiek domeny ≥90 dni = +2 pkt ({pts_a} → {pts_b})")
+    check(not ok_a and pts_a < 7,
+          f"bez bonusu poniżej progu ({pts_a} pkt) → cisza")
+
 
 def e2e_alert() -> None:
     """Pełna ścieżka: kolejka → (podmienione) metadane → scoring → PRAWDZIWY
@@ -67,6 +87,7 @@ def e2e_alert() -> None:
 
     # zamiast sieci: stała lista (baza) + stałe metadane (przechodzą filtr)
     orig_fetch, orig_info = P.fetch_new_coins, P.fetch_token_info
+    orig_check, orig_age = P.check_website, P.domain_age_days
     P.fetch_new_coins = lambda s, **k: [{"mint": "base1", "name": "Baza",
                                           "symbol": "BZ"}]
     P.fetch_token_info = lambda s, uri, mint: {
@@ -75,6 +96,8 @@ def e2e_alert() -> None:
                  "developers."),
         "website": "https://example.io", "twitter": "", "telegram": "",
     }
+    P.check_website = lambda s, u: (True, "ok")     # K5: strona żywa
+    P.domain_age_days = lambda s, u: 200            # domena stara → +2
 
     from radar.app import emit as real_emit
 
@@ -106,7 +129,9 @@ def e2e_alert() -> None:
     c = {"n": 0, "suppressed": 0}
     cycle_pump(cfg, store, sink, session, c, real_emit)
     check(store.counts()["events"] == 1, "dedupe: drugi raz = bez duplikatu")
-    P.fetch_new_coins, P.fetch_token_info = orig_fetch, orig_info  # przywróć live
+    # przywróć live
+    P.fetch_new_coins, P.fetch_token_info = orig_fetch, orig_info
+    P.check_website, P.domain_age_days = orig_check, orig_age
     store.close()
 
 

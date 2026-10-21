@@ -68,9 +68,11 @@ CREATE TABLE IF NOT EXISTS pump_seen (        -- ocenione tokeny pump.fun
     mint    TEXT PRIMARY KEY,
     name    TEXT,
     symbol  TEXT,
-    verdict TEXT NOT NULL,                    -- baseline|nsfw|lex|meta_fail|alerted|no:...
+    verdict TEXT NOT NULL,                    -- baseline|nsfw|lex|brand|short|dup|factory|...
     score   INTEGER NOT NULL DEFAULT 0,
-    ts      INTEGER NOT NULL
+    ts      INTEGER NOT NULL,
+    creator TEXT,                             -- portfel twórcy (K4: dev-fabryka)
+    sig     TEXT                              -- hash metadata_uri (K3: kopie)
 );
 
 CREATE TABLE IF NOT EXISTS pump_queue (       -- etap1 przeszedł → czeka na metadane
@@ -83,7 +85,9 @@ CREATE TABLE IF NOT EXISTS pump_queue (       -- etap1 przeszedł → czeka na m
     created_ms INTEGER,
     mcap_usd   REAL,
     complete   INTEGER NOT NULL DEFAULT 0,
-    queued_at  INTEGER NOT NULL
+    queued_at  INTEGER NOT NULL,
+    creator    TEXT,
+    sig        TEXT
 );
 """
 
@@ -94,6 +98,17 @@ class Store:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.executescript(_SCHEMA)
+        # migracje istniejących baz (kolumny dodane w Antyscam v2)
+        for stmt in (
+            "ALTER TABLE pump_seen ADD COLUMN creator TEXT",
+            "ALTER TABLE pump_seen ADD COLUMN sig TEXT",
+            "ALTER TABLE pump_queue ADD COLUMN creator TEXT",
+            "ALTER TABLE pump_queue ADD COLUMN sig TEXT",
+        ):
+            try:
+                self.conn.execute(stmt)
+            except sqlite3.OperationalError:
+                pass  # kolumna już istnieje
         self.conn.commit()
 
     def close(self) -> None:
@@ -206,22 +221,25 @@ class Store:
 
     def pump_mark_seen(self, rows: list[dict], now: int, verdict: str) -> None:
         self.conn.executemany(
-            "INSERT OR IGNORE INTO pump_seen(mint,name,symbol,verdict,score,ts) "
-            "VALUES(?,?,?,?,0,?)",
-            [(r["mint"], r.get("name"), r.get("symbol"), verdict, now)
-             for r in rows],
+            "INSERT OR IGNORE INTO pump_seen"
+            "(mint,name,symbol,verdict,score,ts,creator,sig) "
+            "VALUES(?,?,?,?,0,?,?,?)",
+            [(r["mint"], r.get("name"), r.get("symbol"), verdict, now,
+              r.get("creator"), r.get("sig")) for r in rows],
         )
         self.conn.commit()
 
     def pump_verdict(self, mint: str, name: str | None, symbol: str | None,
-                     verdict: str, score: int, now: int) -> None:
+                     verdict: str, score: int, now: int, *,
+                     creator: str | None = None,
+                     sig: str | None = None) -> None:
         self.conn.execute("DELETE FROM pump_queue WHERE mint=?", (mint,))
         self.conn.execute(
-            "INSERT INTO pump_seen(mint,name,symbol,verdict,score,ts) "
-            "VALUES(?,?,?,?,?,?) "
+            "INSERT INTO pump_seen(mint,name,symbol,verdict,score,ts,creator,sig) "
+            "VALUES(?,?,?,?,?,?,?,?) "
             "ON CONFLICT(mint) DO UPDATE SET verdict=excluded.verdict, "
             "score=excluded.score, ts=excluded.ts",
-            (mint, name, symbol, verdict, score, now),
+            (mint, name, symbol, verdict, score, now, creator, sig),
         )
         self.conn.commit()
 
@@ -229,12 +247,29 @@ class Store:
         self.conn.execute(
             "INSERT OR IGNORE INTO pump_queue"
             "(mint,name,symbol,uri,website,twitter,created_ms,mcap_usd,"
-            "complete,queued_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            "complete,queued_at,creator,sig) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
             (row["mint"], row["name"], row["symbol"], row["uri"],
              row["website"], row["twitter"], row["created_ms"],
-             row["mcap_usd"], row["complete"], int(time.time())),
+             row["mcap_usd"], row["complete"], int(time.time()),
+             row.get("creator"), row.get("sig")),
         )
         self.conn.commit()
+
+    def pump_sig_exists(self, sig: str) -> bool:
+        """K3: czy taka sygnatura (hash URI) jest już znana?"""
+        row = self.conn.execute(
+            "SELECT 1 FROM pump_seen WHERE sig=? UNION ALL "
+            "SELECT 1 FROM pump_queue WHERE sig=? LIMIT 1",
+            (sig, sig),
+        ).fetchone()
+        return row is not None
+
+    def pump_creator_count(self, creator: str, since_ts: int) -> int:
+        """K4: ile tokenów ten twórca wypuścił od since_ts?"""
+        return int(self.conn.execute(
+            "SELECT COUNT(*) FROM pump_seen WHERE creator=? AND ts>=?",
+            (creator, since_ts),
+        ).fetchone()[0])
 
     def pump_queue_pop(self, n: int) -> list[sqlite3.Row]:
         rows = self.conn.execute(
@@ -331,11 +366,11 @@ class Store:
                                   "FROM cg_safe_pairs ORDER BY pair_id"),
             "events": rows("SELECT ts, dedupe_key, source, etype, priority, title, "
                            "detail, url, alerted FROM events ORDER BY id"),
-            "pump_seen": rows("SELECT mint, name, symbol, verdict, score, ts "
-                              "FROM pump_seen ORDER BY mint"),
+            "pump_seen": rows("SELECT mint, name, symbol, verdict, score, ts, "
+                              "creator, sig FROM pump_seen ORDER BY mint"),
             "pump_queue": rows("SELECT mint, name, symbol, uri, website, twitter, "
-                               "created_ms, mcap_usd, complete, queued_at "
-                               "FROM pump_queue ORDER BY mint"),
+                               "created_ms, mcap_usd, complete, queued_at, "
+                               "creator, sig FROM pump_queue ORDER BY mint"),
         }
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
@@ -372,12 +407,19 @@ class Store:
             "INSERT INTO events(ts, dedupe_key, source, etype, priority, title, "
             "detail, url, alerted) VALUES(?,?,?,?,?,?,?,?,?)",
             data.get("events", []))
+
+        def _pad(rows, n):
+            # stare wersje state.json miały mniej kolumn — uzupełnij None
+            return [list(r) + [None] * (n - len(r)) for r in rows]
+
         c.executemany(
-            "INSERT INTO pump_seen(mint, name, symbol, verdict, score, ts) "
-            "VALUES(?,?,?,?,?,?)", data.get("pump_seen", []))
+            "INSERT INTO pump_seen(mint, name, symbol, verdict, score, ts, "
+            "creator, sig) VALUES(?,?,?,?,?,?,?,?)",
+            _pad(data.get("pump_seen", []), 8))
         c.executemany(
             "INSERT INTO pump_queue(mint, name, symbol, uri, website, twitter, "
-            "created_ms, mcap_usd, complete, queued_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-            data.get("pump_queue", []))
+            "created_ms, mcap_usd, complete, queued_at, creator, sig) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            _pad(data.get("pump_queue", []), 12))
         c.commit()
         return True

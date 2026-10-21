@@ -33,10 +33,10 @@ class Config:
     db_path: str = "listing_radar.db"
     log_path: str = "alerts.log"
     max_events_per_cycle: int = 30     # zabezpieczenie przed falą alertów
-    # pump.fun — wczesna filtracja „fundamenty vs memecoiny"
+    # pump.fun — wczesna filtracja „fundamenty vs memecoiny" (Antyscam v2)
     pump_enabled: bool = True          # moduł pump.fun (odłączalny)
     pump_meta_per_cycle: int = 40      # ile metadanych oceniamy w cyklu
-    pump_min_score: int = 5            # próg punktów do alertu 🔬
+    pump_min_score: int = 6            # próg punktów do alertu 🔬 (max 12)
 
     @property
     def cg_mode(self) -> str:
